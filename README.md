@@ -24,4 +24,4 @@ Kyle Hunslow shows applications of what you can learn from the image processing 
 https://www.youtube.com/watch?v=cgo0UitHfp8&list=PLvwB65U8V0HHCEyW2UTyOJym5FsdqfbHQ
 
 
-
+254 did a presentation on vision at the 2016 championship. They talk more on integration with the robot than the target detection, as that is generally the more dificult part of the problem. video: https://www.youtube.com/watch?v=rLwOkAJqImo slides: https://goo.gl/mppi4E
