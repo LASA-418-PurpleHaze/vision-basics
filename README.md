@@ -6,6 +6,8 @@ in a linux environment, after creating a runnable file, use ./tutorialname Path/
 
 Files in the calculations folder require you to connect a camera to your computer. You may need to change the line capture.open(1) to capture.open(0) or some other number for your computer to use the camera that you want.
 
+regarding the c++ vs java, most of what is in this folder is just calling the opencv functions, so it would look very similar in both languages. I feel that the main difference you would see if this was in java is that there would be arrays instead of vectors, same concept though. Going back to "just calling the opencv functions", since the heart of what's being done is from a library, using c++ doesn't give you significantly more efficient run times, so to allow more people to contribute comfortably we can use java for all of this.
+
 Resources:
 the actual image processing module tutorials from opencv.org: 
 http://docs.opencv.org/2.4/doc/tutorials/imgproc/table_of_content_imgproc/table_of_content_imgproc.html#table-of-content-imgproc
