@@ -26,3 +26,5 @@ cmake -DBUILD_SHARED_LIBS=OFF ..
   if not, those issues must be resolved before continuing
 make -j8 (takes like 15-20 minutes rip)
 
+resources:
+http://docs.opencv.org/2.4/doc/tutorials/introduction/desktop_java/java_dev_intro.html
