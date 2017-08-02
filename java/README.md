@@ -22,9 +22,10 @@ mkdir build
 cd build
 export JAVA_HOME=/usr/lib/jvm/java-6-oracle
 cmake -DBUILD_SHARED_LIBS=OFF ..
-  after cmake, check to see that under Java... ant has a path, JNI has a path, and Java tests says YES
+  after cmake, check to see that under Java... ant has a path, JNI has a path and Java tests says YES
   if not, those issues must be resolved before continuing
 make -j8 (takes like 15-20 minutes rip)
 
 resources:
-http://docs.opencv.org/2.4/doc/tutorials/introduction/desktop_java/java_dev_intro.html
+overall instructions > http://docs.opencv.org/2.4/doc/tutorials/introduction/desktop_java/java_dev_intro.html
+what cmake should look like (part 2. Compile) > https://advancedweb.hu/2016/03/01/opencv_ubuntu/
