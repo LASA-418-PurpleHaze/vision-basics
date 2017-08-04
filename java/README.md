@@ -9,11 +9,11 @@ now you can write and run a java program
 
 1. make a .java file 
 2. use javac filename.java
-  now you have a filename.class file
+   now you have a filename.class file
 3. use java filename or java filename.class
-  yay it did the thing it was supposed to do
-
-getting opencv working with java is a little bit more work
+   yay it did the thing it was supposed to do
+ 
+getting opencv working with java is a little bit more work...
 
 1. Use Jetson Hacks github to install opencv
 http://www.jetsonhacks.com/2017/04/05/build-opencv-nvidia-jetson-tx2/
@@ -54,5 +54,5 @@ class cvhw {
 }
 
 5. Use 'javac' to compile and 'java' to run but with special command-line options:
-javac -cp /usr/share/OpenCV/java/opencv-320.jar:. filename.java
-java -cp /usr/share/OpenCV/java/opencv-320.jar:. filename
+javac -cp /usr/share/OpenCV/java/opencv-320.jar:. cvhw.java
+java -cp /usr/share/OpenCV/java/opencv-320.jar:. cvhw
