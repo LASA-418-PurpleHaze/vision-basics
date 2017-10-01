@@ -1,0 +1,265 @@
+//capture images from the camera
+//process them to find where the vision target is
+//publish information about the target for the roborio to read
+
+//uses an unknown camera height and target height, so it requires the full target to be visible for accurate information
+//once camera height and target height are fixed, more flexible geometry can be used
+
+#include <stdlib.h>
+#include <zmq.hpp>
+#include <string>
+#include <iostream>
+#include <sstream>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <opencv2/highgui.hpp>
+#include <opencv2/opencv.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <math.h>
+#include <iomanip>
+#include "zhelpers.hpp"
+
+using namespace cv;
+using namespace std;
+using namespace zmq;
+
+//define size of image captured
+const int FRAME_WIDTH = 640;
+const int FRAME_HEIGHT = 480;
+
+//define trackbar values
+int H_MID = 75;
+int H_PM = 10;
+int S_MIN = 150;
+int S_MAX = 255;
+int V_MIN = 28;
+int V_MAX = 115;
+int type_of_thresh; //HSV, RGB, Gray
+
+//focal length is a measurement of the camera
+//calculated by doing some calibration with a known distance
+int focal_length = 717;
+
+//define morphops trackbar variables
+int erode_size = 1;  
+int dilate_size = 8; 
+int morphop_max = 10;
+
+//define target size
+int target_height = 1; //target height in inches. just using a roll of tape is 1 inch
+
+//boolean for readability in sending data to roborio
+bool found_single_target;
+
+//calculate angle offset between what and the tape?
+//choose some point, call it the center of the image, that the camera should try to line up with
+Point2f desired_location = Point2f(FRAME_WIDTH/2, FRAME_HEIGHT/2);
+
+//dimensions of rectangles that will be drawn around objects
+struct WidthAndHeight{
+	int width;
+	int height;
+};
+
+//calculate distance between two points in the image
+//used for determining orientation of the target, esp. if rectangle is rotated
+int DistFormula(Point point_a, Point point_b){
+	return sqrt((point_a.x-point_b.x)*(point_a.x-point_b.x)+(point_a.y-point_b.y)*(point_a.y-point_b.y));
+}
+
+//determine dimensions/orientation of a rectangle
+WidthAndHeight CalcWidthAndHeight(Point point_one, Point point_two, Point point_three){
+	WidthAndHeight result;
+	
+	int length_one = DistFormula(point_one, point_two);
+	int length_two = DistFormula(point_two, point_three);
+
+	if(length_one > length_two){
+		result.width = length_one;
+		result.height = length_two;
+	}else{ //length_one is < length_two
+		result.width = length_two;
+		result.height = length_one;
+	}
+	return result;
+}
+
+//required function for using trackbars
+void trackbarCallback(int, void*){
+	//doesn't need to do anything since the trackbars just change a global value
+}
+
+//create trackbars to adjust parameters for filtering image
+void createTrackbars(){
+	namedWindow("HSV adjust", 0);
+	createTrackbar("0: HSV | 1: RGB | 2: Gray", "HSV adjust", &type_of_thresh, 2, trackbarCallback);
+	createTrackbar("H_MID", "HSV adjust", &H_MID, H_MAX, trackbarCallback);
+	createTrackbar("H_PM", "HSV adjust", &H_PM, 255, trackbarCallback);
+	createTrackbar("S_MIN", "HSV adjust", &S_MIN, H_MAX, trackbarCallback);
+	createTrackbar("S_MAX", "HSV adjust", &S_MAX, H_MAX, trackbarCallback);
+	createTrackbar("V_MIN", "HSV adjust", &V_MIN, H_MAX, trackbarCallback);
+	createTrackbar("V_MAX", "HSV adjust", &V_MAX, H_MAX, trackbarCallback);
+	createTrackbar("ERODE_SIZE", "HSV adjust", &erode_size, morphop_max, trackbarCallback);
+	createTrackbar("DILATE_SIZE", "HSV adjust", &dilate_size, morphop_max, trackbarCallback);
+
+}
+
+//go from radians to degrees
+double cvtAngle(double radianVal){
+
+	return (180/3.14) * radianVal;
+}
+
+int main(){
+	
+	//create a matrix for each step to improve readability
+	Mat src;
+	Mat color_converted
+	Mat thresh;
+	Mat erodeElement;
+	Mat dilateElement;
+	Mat box_drawings;
+
+	//setup camera
+	VideoCapture capture;
+	capture.open(1);
+	capture.set(CV_CAP_PROP_FRAME_WIDTH, FRAME_WIDTH);
+	capture.set(CV_CAP_PROP_FRAME_HEIGHT,FRAME_HEIGHT);
+
+	//create trackbars
+	createTrackbars();
+
+	//drop the exposure of the camera to 2ms
+	system("v4l2-ctl -d /dev/video1 -c exposure_auto=1 -c exposure_absolute=2");
+	
+	//initialize zmq objects
+	context_t context (1);
+	socket_t publisher (context, ZMQ_PUB);
+	publisher.bind("tcp://*:5804");
+	
+	//create vars that will contain the information we're trying to send
+	double pan_adjust;
+	double tilt_adjust;
+
+	//process the image and send results forever (not really)
+	while(1) {
+
+		//read image from camera and show it in its own window
+		capture.read(src);
+		imshow("Source (1)", src);
+
+		//set up next matrix with proper size and type
+		color_converted.create(src.size(), src.type());
+
+		//convert the colorspace according to the threshold type trackbar
+		switch(type_of_thresh){
+			case 0:
+				cvtColor(src, color_converted, COLOR_BGR2HSV);
+				break;
+			case 1:
+				src.copyTo(color_converted);
+				break;
+			case 2:
+				cvtColor(src, color_converted, COLOR_BGR2GRAY);
+	   	} 
+	   
+		//show the converted color image in its own window
+		imshow("Converted (2)", color_converted);
+	  
+		//threshold the image using ranges from the trackbars and show the thresholded image
+		inRange(color_converted, Scalar(H_MID - H_PM, S_MIN, V_MIN), Scalar(H_MID + H_PM, S_MAX, V_MAX), thresh);
+		imshow("Thresh (3)", thresh);
+
+		//apply some morphops to reduce noise and show the resulting image
+		//this changes the size of the object in the image.
+		erodeElement = getStructuringElement( MORPH_RECT,Size(erode_size, erode_size));
+		//dilate with larger element object is nicely visible
+		dilateElement = getStructuringElement( MORPH_RECT,Size(dilate_size, dilate_size));
+		erode(thresh, thresh, erodeElement);
+		dilate(thresh, thresh, dilateElement);
+		imshow("Morphops (4)", thresh);
+	
+		//find all objects in the thresholded image (hopefully there's only one)
+		vector<vector<Point> > contours;
+		vector<Vec4i> hierarchy;
+		findContours(thresh, contours, hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_SIMPLE, Point(0, 0) );
+		vector<RotatedRect> minRect(contours.size());
+		
+		//create rectangles around all of the objects in the thresholded image
+		for(int i = 0; i < contours.size(); i++){
+			minRect[i] = minAreaRect(Mat(contours[i]));
+		}
+		
+		//create an empty matrix that will be used to show the final important things in the image
+		box_drawings = Mat::zeros(thresh.size(), thresh.type());
+	
+		//for each object in the noise reduced image, draw a box around it.
+		//if it seems big enough (probably not noise and is the actual object, calculate the angle
+		for( int i = 0; i< contours.size(); i++ ){
+	       		Scalar color = Scalar(255, 255, 255);
+		        //show the contour of each contour
+		        drawContours( box_drawings, contours, i, color, 1, 8, vector<Vec4i>(), 0, Point() );
+
+		        //show each contour's rectangle
+			Point2f rect_points[4]; 
+			minRect[i].points( rect_points );
+			for( int j = 0; j < 4; j++ ){
+	          		line( box_drawings, rect_points[j], rect_points[(j+1)%4], color, 1, 8 );
+			}
+			
+			//if the rectangle seems to be about the right size for the target and isn't noise, do some calculations with it
+			WidthAndHeight box_measurements = CalcWidthAndHeight(rect_points[0], rect_points[1], rect_points[2]);
+			if(box_measurements.width > 10){
+				//calculate depth and center of the target
+				//draw some dots where the object is and where it should be if we're lined up perfectly
+				//do some conversions between inches and pixels, and use some trig to get the depth and then the angle offset in both directions
+				//keep the numbers to send to the roborio, but also put them at the top of the final display image
+				double depth = (focal_length*target_height) / box_measurements.height;
+				Moments target_moment = moments(contours[i], false);
+				Point2f target_center = Point2f(target_moment.m10/target_moment.m00, target_moment.m01/target_moment.m00);
+				circle(box_drawings, target_center, 4, color, -1, 8, 0);
+				circle(box_drawings, desired_location, 8, color, -1, 8, 0);
+				double inches_offset_x = (((desired_location.x - target_center.x) / box_measurements.height)*target_height);
+				pan_adjust = -1*cvtAngle(atan(inches_offset_x / depth));
+				double inches_offset_y = (((desired_location.y - target_center.y) / box_measurements.height)*target_height);
+				tilt_adjust = -1*cvtAngle(atan(inches_offset_y / depth));
+				char print_buffer[50];
+				sprintf(print_buffer, "%.1f and %.1f (%.0f)", pan_adjust, tilt_adjust, depth);
+				putText(box_drawings, print_buffer, Point(0, 60), 2, 2, Scalar(255, 0, 255), 2);
+				
+			}
+		 }
+
+		//display the contour of each object, the rectangle of each object, the two centers, and the angle offsets and depth in one image
+		imshow("Boxes (5)", box_drawings);
+		
+		//determine whether or not we found a single target and store it in a boolean for readability
+		if(contours.size() == 1){
+			found_single_target = true;
+		}else{
+			found_single_target = false;
+		}
+		
+		//get the angle offsets (up to 3 digits for the numbers to send) ready to send to the roborio
+		stringstream data_ss;
+		data_ss << found_single_target << 
+			" " << setprecision(3) << pan_adjust << 
+			" " << setprecision(3) << tilt_adjust << endl;
+
+		string data_s = data_ss.str();
+
+		//print it to the screen and then yell it out loud and hope the roborio is listening
+		cout << "sending: " << 	data_s << endl;
+		s_send(publisher, data_s);
+		
+		//stop doing things forever if the escape button is pressed 
+		int c = waitKey(10);
+		if((char)c == 27){
+			break;
+		}
+	}
+	
+	return 0;
+
+}
