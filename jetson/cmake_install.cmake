@@ -1,4 +1,4 @@
-# Install script for directory: /home/nvidia/tutorials/tracksend
+# Install script for directory: /home/nvidia/github/vision-basics/jetson
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -40,5 +40,5 @@ endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
-file(WRITE "/home/nvidia/tutorials/tracksend/${CMAKE_INSTALL_MANIFEST}"
+file(WRITE "/home/nvidia/github/vision-basics/jetson/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")

@@ -31,6 +31,7 @@ const int FRAME_HEIGHT = 480;
 //define trackbar values
 int H_MID = 75;
 int H_PM = 10;
+int H_MAX = 255;
 int S_MIN = 150;
 int S_MAX = 255;
 int V_MIN = 28;
@@ -115,8 +116,9 @@ int main(){
 	
 	//create a matrix for each step to improve readability
 	Mat src;
-	Mat color_converted
+	Mat color_converted;
 	Mat thresh;
+	Mat morphops;
 	Mat erodeElement;
 	Mat dilateElement;
 	Mat box_drawings;
@@ -173,13 +175,22 @@ int main(){
 
 		//apply some morphops to reduce noise and show the resulting image
 		//this changes the size of the object in the image.
-		erodeElement = getStructuringElement( MORPH_RECT,Size(erode_size, erode_size));
-		//dilate with larger element object is nicely visible
-		dilateElement = getStructuringElement( MORPH_RECT,Size(dilate_size, dilate_size));
-		erode(thresh, thresh, erodeElement);
-		dilate(thresh, thresh, dilateElement);
-		imshow("Morphops (4)", thresh);
-	
+		//if either erode and dilate size is set to 0, skip the morphops process. mainly for testing it without changing the size of the object, but also so it doesn't die when one of them is 0.
+		if(erode_size != 0 && dilate_size != 0){ 
+			erodeElement = getStructuringElement( MORPH_RECT,Size(erode_size, erode_size));
+			//dilate with larger element object is nicely visible
+			dilateElement = getStructuringElement( MORPH_RECT,Size(dilate_size, dilate_size));
+			erode(thresh, morphops, erodeElement);
+			dilate(morphops, morphops, dilateElement);
+		}else{
+			morphops = thresh.clone(); //take the value of thresh, but don't edit it.
+			char buffer[50];
+			sprintf(buffer, "no morphops");
+			putText(morphops, buffer, Point(0, 60), 2, 2, Scalar(255, 0, 255), 2);
+		}
+		
+		imshow("Morphops (4)", morphops);	
+		
 		//find all objects in the thresholded image (hopefully there's only one)
 		vector<vector<Point> > contours;
 		vector<Vec4i> hierarchy;
