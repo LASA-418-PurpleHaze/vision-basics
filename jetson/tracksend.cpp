@@ -37,6 +37,7 @@ int S_MAX = 255;
 int V_MIN = 28;
 int V_MAX = 115;
 int type_of_thresh; //HSV, RGB, Gray
+int num_targets_found; //debugging variable to ensure only one target is found
 
 //focal length is a measurement of the camera
 //calculated by doing some calibration with a known distance
@@ -51,7 +52,7 @@ int morphop_max = 10;
 int target_height = 1; //target height in inches. just using a roll of tape is 1 inch
 
 //boolean for readability in sending data to roborio
-bool found_single_target;
+bool found_single_target = true; //set to true since ContourSelector takes care of it. can be deleted eventually, but roborio code should get updated accordingly
 
 //calculate angle offset between what and the tape?
 //choose some point, call it the center of the image, that the camera should try to line up with
@@ -112,6 +113,20 @@ double cvtAngle(double radianVal){
 	return (180/3.14) * radianVal;
 }
 
+//go through an array of contours and return the index of the contour with the greatest area
+//takes in the address of the array, and the size
+//used to find biggest target, essentially a filter for morphops-resistant noise
+int ContourSelector(vector<vector<Point> > *contours, int num_contours){
+	int max_area_index = 0;
+	for(int i = 0; i < num_contours; i++){
+		//if a contour's area is larger than the current max, update the current max
+		if(contourArea(*contours[i]) > contourArea(*contours[max_area_index]){ 
+			max_area_index = i;
+		}
+	}
+	return max_area_index;
+}
+
 int main(){
 	
 	//create a matrix for each step to improve readability
@@ -138,8 +153,9 @@ int main(){
 	//initialize zmq objects
 	context_t context (1);
 	socket_t publisher (context, ZMQ_PUB);
+	int sndhwm = 1;
+	zmq_setsockopt(&publisher, ZMQ_SNDHWM, &sndhwm, sizeof(sndhwm));
 	publisher.bind("tcp://*:5804");
-	
 	//create vars that will contain the information we're trying to send
 	double pan_adjust;
 	double tilt_adjust;
@@ -205,6 +221,7 @@ int main(){
 		//create an empty matrix that will be used to show the final important things in the image
 		box_drawings = Mat::zeros(thresh.size(), thresh.type());
 	
+		int target_index = ContourSelector(&contours, contours.size());
 		//for each object in the noise reduced image, draw a box around it.
 		//if it seems big enough (probably not noise and is the actual object, calculate the angle
 		for( int i = 0; i< contours.size(); i++ ){
@@ -221,7 +238,10 @@ int main(){
 			
 			//if the rectangle seems to be about the right size for the target and isn't noise, do some calculations with it
 			WidthAndHeight box_measurements = CalcWidthAndHeight(rect_points[0], rect_points[1], rect_points[2]);
-			if(box_measurements.width > 10){
+			
+			int target_index = ContourSelector(&contours, contours.size());
+			
+			if(i == target_index){
 				//calculate depth and center of the target
 				//draw some dots where the object is and where it should be if we're lined up perfectly
 				//do some conversions between inches and pixels, and use some trig to get the depth and then the angle offset in both directions
@@ -238,6 +258,7 @@ int main(){
 				char print_buffer[50];
 				sprintf(print_buffer, "%.1f and %.1f (%.0f)", pan_adjust, tilt_adjust, depth);
 				putText(box_drawings, print_buffer, Point(0, 60), 2, 2, Scalar(255, 0, 255), 2);
+
 				
 			}
 		 }
@@ -245,16 +266,19 @@ int main(){
 		//display the contour of each object, the rectangle of each object, the two centers, and the angle offsets and depth in one image
 		imshow("Boxes (5)", box_drawings);
 		
+
+			
+		/* not needed, since ContourSelector should guarantee only one target
 		//determine whether or not we found a single target and store it in a boolean for readability
-		if(contours.size() == 1){
+		if(num_targets_found == 1){
 			found_single_target = true;
 		}else{
 			found_single_target = false;
-		}
+		}*/
 		
 		//get the angle offsets (up to 3 digits for the numbers to send) ready to send to the roborio
 		stringstream data_ss;
-		data_ss << found_single_target << 
+		data_ss << found_single_target <<
 			" " << setprecision(3) << pan_adjust << 
 			" " << setprecision(3) << tilt_adjust << endl;
 
