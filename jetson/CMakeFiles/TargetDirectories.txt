@@ -1,3 +1,0 @@
-/home/nvidia/github/vision-basics/jetson/CMakeFiles/edit_cache.dir
-/home/nvidia/github/vision-basics/jetson/CMakeFiles/rebuild_cache.dir
-/home/nvidia/github/vision-basics/jetson/CMakeFiles/tracksend.dir
