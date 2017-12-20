@@ -287,10 +287,10 @@ OpenCV_DIR:PATH=/usr/share/OpenCV
 PKG_CONFIG_EXECUTABLE:FILEPATH=/usr/bin/pkg-config
 
 //Path to a file.
-ZeroMQ_INCLUDE_DIR:PATH=/usr/local/include
+ZeroMQ_INCLUDE_DIR:PATH=/usr/include
 
 //Path to a library.
-ZeroMQ_LIBRARY:FILEPATH=/usr/local/lib/libzmq.so
+ZeroMQ_LIBRARY:FILEPATH=/usr/lib/aarch64-linux-gnu/libzmq.so
 
 //Value Computed by CMake
 tracksend_BINARY_DIR:STATIC=/home/nvidia/github/vision-basics/jetson

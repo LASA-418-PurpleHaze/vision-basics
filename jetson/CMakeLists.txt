@@ -1,6 +1,7 @@
 
 cmake_minimum_required(VERSION 3.2)
 project(tracksend)
+set(CMAKE_CXX_STANDARD 14)
 find_package( OpenCV REQUIRED )
 find_package(PkgConfig)
 pkg_check_modules(PC_ZeroMQ QUIET zmq)

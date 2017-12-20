@@ -19,10 +19,13 @@
 #include <math.h>
 #include <iomanip>
 #include "zhelpers.hpp"
+#include <chrono>
+#include <fstream>
 
 using namespace cv;
 using namespace std;
 using namespace zmq;
+using namespace std::chrono;
 
 //define size of image captured
 const int FRAME_WIDTH = 640;
@@ -47,6 +50,11 @@ int focal_length = 717;
 int erode_size = 1;  
 int dilate_size = 8; 
 int morphop_max = 10;
+
+//initialize zmq objects
+context_t context (1);
+socket_t publisher (context, ZMQ_PUB);
+int sndhwm = 1;
 
 //define target size
 int target_height = 1; //target height in inches. just using a roll of tape is 1 inch
@@ -107,27 +115,70 @@ void createTrackbars(){
 
 }
 
+
 //go from radians to degrees
 double cvtAngle(double radianVal){
 
 	return (180/3.14) * radianVal;
 }
 
+void publishKeyAndValue(string key, string value){
+	string key_value_pair = key + value;
+	s_send(publisher, key_value_pair);
+}
+
+void findAndSendTemperature(){
+	try{
+		ifstream temperature_file;
+		temperature_file.open("/sys/class/thermal/thermal_zone2/temp", ios::in);
+		string temperature_key = "JETSON.TEMPERATURE";
+
+		double temperature_value;
+		temperature_file >> temperature_value;
+		
+		stringstream temperature_ss;
+		temperature_ss << setprecision(3) << temperature_value/1000 << endl;
+		publishKeyAndValue(temperature_key, temperature_ss.str()); 
+		cout << temperature_ss.str() << endl;
+		temperature_file.close();
+	}catch(...){} //don't do anything if you can't get the temperature reading
+	
+	
+}
+
+void publishVisionCalculations(double pan_value, double tilt_value, double depth_value){
+	string pan_key = "JETSON.PAN_VALUE";
+	stringstream pan_ss;
+	pan_ss << setprecision(3) << pan_value << endl;
+	publishKeyAndValue(pan_key, pan_ss.str());
+
+	string tilt_key = "JETSON.TILT_VALUE";
+	stringstream tilt_ss;
+	tilt_ss << setprecision(3) << tilt_value << endl;
+	publishKeyAndValue(tilt_key, tilt_ss.str());
+
+	string depth_key = "JETSON.DEPTH";
+	stringstream depth_ss;
+	depth_ss << setprecision(3) << depth_value << endl;
+	publishKeyAndValue(depth_key, depth_ss.str());
+
+}
 //go through an array of contours and return the index of the contour with the greatest area
 //takes in the address of the array, and the size
 //used to find biggest target, essentially a filter for morphops-resistant noise
-int ContourSelector(vector<vector<Point> > *contours, int num_contours){
+int ContourSelector(vector<vector<Point> > contours){
 	int max_area_index = 0;
-	for(int i = 0; i < num_contours; i++){
+	for(int i = 0; i < contours.size(); i++){
 		//if a contour's area is larger than the current max, update the current max
-		if(contourArea(*contours[i]) > contourArea(*contours[max_area_index]){ 
+		if(contourArea(contours[i]) > contourArea(contours[max_area_index])){ 
 			max_area_index = i;
+			
 		}
 	}
 	return max_area_index;
 }
 
-int main(){
+int main(int argc, char* argv[]){
 	
 	//create a matrix for each step to improve readability
 	Mat src;
@@ -148,24 +199,36 @@ int main(){
 	createTrackbars();
 
 	//drop the exposure of the camera to 2ms
-	system("v4l2-ctl -d /dev/video1 -c exposure_auto=1 -c exposure_absolute=2");
+	system("v4l2-ctl -d /dev/video1 -c exposure_auto=1 -c exposure_absolute=3");
 	
-	//initialize zmq objects
-	context_t context (1);
-	socket_t publisher (context, ZMQ_PUB);
-	int sndhwm = 1;
-	zmq_setsockopt(&publisher, ZMQ_SNDHWM, &sndhwm, sizeof(sndhwm));
-	publisher.bind("tcp://*:5804");
+	
+
+	//zmq_setsockopt(&publisher, ZMQ_SNDHWM, &sndhwm, sizeof(sndhwm));
+	publisher.bind("tcp://*:5803");
+
 	//create vars that will contain the information we're trying to send
 	double pan_adjust;
 	double tilt_adjust;
-
+	double depth;
+	
+	//check match mode, set a boolean to determine whether or not to use graphical information
+	bool graphics_mode;
+	graphics_mode = true;
+	if(argc > 1){
+		if(string(argv[1]) == "-match"){
+			graphics_mode = false;
+		}
+	}
+	
 	//process the image and send results forever (not really)
 	while(1) {
 
 		//read image from camera and show it in its own window
 		capture.read(src);
-		imshow("Source (1)", src);
+		
+		if(graphics_mode){
+			imshow("Source (1)", src);
+		}
 
 		//set up next matrix with proper size and type
 		color_converted.create(src.size(), src.type());
@@ -183,11 +246,17 @@ int main(){
 	   	} 
 	   
 		//show the converted color image in its own window
-		imshow("Converted (2)", color_converted);
-	  
+		if(graphics_mode){
+			imshow("Converted (2)", color_converted);
+	  	}
+
+
 		//threshold the image using ranges from the trackbars and show the thresholded image
 		inRange(color_converted, Scalar(H_MID - H_PM, S_MIN, V_MIN), Scalar(H_MID + H_PM, S_MAX, V_MAX), thresh);
-		imshow("Thresh (3)", thresh);
+
+		if(graphics_mode){
+			imshow("Thresh (3)", thresh);
+		}
 
 		//apply some morphops to reduce noise and show the resulting image
 		//this changes the size of the object in the image.
@@ -205,8 +274,10 @@ int main(){
 			putText(morphops, buffer, Point(0, 60), 2, 2, Scalar(255, 0, 255), 2);
 		}
 		
-		imshow("Morphops (4)", morphops);	
-		
+		if(graphics_mode){
+			imshow("Morphops (4)", morphops);	
+		}
+
 		//find all objects in the thresholded image (hopefully there's only one)
 		vector<vector<Point> > contours;
 		vector<Vec4i> hierarchy;
@@ -221,12 +292,13 @@ int main(){
 		//create an empty matrix that will be used to show the final important things in the image
 		box_drawings = Mat::zeros(thresh.size(), thresh.type());
 	
-		int target_index = ContourSelector(&contours, contours.size());
+		int target_index = ContourSelector(contours);
 		//for each object in the noise reduced image, draw a box around it.
 		//if it seems big enough (probably not noise and is the actual object, calculate the angle
 		for( int i = 0; i< contours.size(); i++ ){
+			
 	       		Scalar color = Scalar(255, 255, 255);
-		        //show the contour of each contour
+						//show the contour of each contour
 		        drawContours( box_drawings, contours, i, color, 1, 8, vector<Vec4i>(), 0, Point() );
 
 		        //show each contour's rectangle
@@ -238,15 +310,14 @@ int main(){
 			
 			//if the rectangle seems to be about the right size for the target and isn't noise, do some calculations with it
 			WidthAndHeight box_measurements = CalcWidthAndHeight(rect_points[0], rect_points[1], rect_points[2]);
-			
-			int target_index = ContourSelector(&contours, contours.size());
-			
+					
 			if(i == target_index){
+				
 				//calculate depth and center of the target
 				//draw some dots where the object is and where it should be if we're lined up perfectly
 				//do some conversions between inches and pixels, and use some trig to get the depth and then the angle offset in both directions
 				//keep the numbers to send to the roborio, but also put them at the top of the final display image
-				double depth = (focal_length*target_height) / box_measurements.height;
+				depth = (focal_length*target_height) / box_measurements.height;
 				Moments target_moment = moments(contours[i], false);
 				Point2f target_center = Point2f(target_moment.m10/target_moment.m00, target_moment.m01/target_moment.m00);
 				circle(box_drawings, target_center, 4, color, -1, 8, 0);
@@ -263,30 +334,31 @@ int main(){
 			}
 		 }
 
-		//display the contour of each object, the rectangle of each object, the two centers, and the angle offsets and depth in one image
-		imshow("Boxes (5)", box_drawings);
-		
+		//display the contour of each object, 
+		//the rectangle of each object, 
+	  //the two centers, and the angle offsets and depth in one image
+		if(graphics_mode){
+			imshow("Boxes (5)", box_drawings);
+		}		
 
 			
-		/* not needed, since ContourSelector should guarantee only one target
+		// not needed, since ContourSelector should guarantee only one target
 		//determine whether or not we found a single target and store it in a boolean for readability
-		if(num_targets_found == 1){
+		//***REPLACE WITH CORNER COUNTING CHECK OR AREA VS CONVEX HULL AREA PROPORTION CHECK***
+		//***********************CURRENT CHECK ISN'T DOING MUCH********************************
+		if(contours.size() > 0){
 			found_single_target = true;
 		}else{
 			found_single_target = false;
-		}*/
+		}
 		
-		//get the angle offsets (up to 3 digits for the numbers to send) ready to send to the roborio
-		stringstream data_ss;
-		data_ss << found_single_target <<
-			" " << setprecision(3) << pan_adjust << 
-			" " << setprecision(3) << tilt_adjust << endl;
+		//send angle offsets and depth to roborio	
+		publishVisionCalculations(pan_adjust, tilt_adjust, depth);
 
-		string data_s = data_ss.str();
-
-		//print it to the screen and then yell it out loud and hope the roborio is listening
-		cout << "sending: " << 	data_s << endl;
-		s_send(publisher, data_s);
+		findAndSendTemperature();
+    //unsigned int ms = duration_cast< milliseconds >(system_clock::now().time_since_epoch()).count();
+		//cout << ms << endl;
+			
 		
 		//stop doing things forever if the escape button is pressed 
 		int c = waitKey(10);
