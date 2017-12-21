@@ -1,10 +1,3 @@
-//capture images from the camera
-//process them to find where the vision target is
-//publish information about the target for the roborio to read
-
-//uses an unknown camera height and target height, so it requires the full target to be visible for accurate information
-//once camera height and target height are fixed, more flexible geometry can be used
-
 #include <stdlib.h>
 #include <zmq.hpp>
 #include <string>
@@ -13,119 +6,18 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <opencv2/highgui.hpp>
-#include <opencv2/opencv.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
-#include <math.h>
 #include <iomanip>
 #include "zhelpers.hpp"
-#include <chrono>
-#include <fstream>
-#include <thread>
 
-using namespace cv;
 using namespace std;
 using namespace zmq;
-using namespace std::chrono;
-
-//define size of image captured
-const int FRAME_WIDTH = 640;
-const int FRAME_HEIGHT = 480;
-
-//define trackbar values
-int H_MID = 75;
-int H_PM = 10;
-int H_MAX = 255;
-int S_MIN = 150;
-int S_MAX = 255;
-int V_MIN = 28;
-int V_MAX = 115;
-int type_of_thresh; //HSV, RGB, Gray
-int num_targets_found; //debugging variable to ensure only one target is found
-
-//focal length is a measurement of the camera
-//calculated by doing some calibration with a known distance
-int focal_length = 717;
-
-//define morphops trackbar variables
-int erode_size = 1;  
-int dilate_size = 8; 
-int morphop_max = 10;
 
 //initialize zmq objects
 context_t context (1);
 socket_t publisher (context, ZMQ_PUB);
-int sndhwm = 1;
 
-//define target size
-int target_height = 1; //target height in inches. just using a roll of tape is 1 inch
-
-//boolean for readability in sending data to roborio
-bool found_single_target = true; //set to true since ContourSelector takes care of it. can be deleted eventually, but roborio code should get updated accordingly
-
-//calculate angle offset between what and the tape?
-//choose some point, call it the center of the image, that the camera should try to line up with
-Point2f desired_location = Point2f(FRAME_WIDTH/2, FRAME_HEIGHT/2);
-
-//dimensions of rectangles that will be drawn around objects
-struct WidthAndHeight{
-	int width;
-	int height;
-};
-
-//calculate distance between two points in the image
-//used for determining orientation of the target, esp. if rectangle is rotated
-int DistFormula(Point point_a, Point point_b){
-	return sqrt((point_a.x-point_b.x)*(point_a.x-point_b.x)+(point_a.y-point_b.y)*(point_a.y-point_b.y));
-}
-
-//determine dimensions/orientation of a rectangle
-WidthAndHeight CalcWidthAndHeight(Point point_one, Point point_two, Point point_three){
-	WidthAndHeight result;
-	
-	int length_one = DistFormula(point_one, point_two);
-	int length_two = DistFormula(point_two, point_three);
-
-	if(length_one > length_two){
-		result.width = length_one;
-		result.height = length_two;
-	}else{ //length_one is < length_two
-		result.width = length_two;
-		result.height = length_one;
-	}
-	return result;
-}
-
-//required function for using trackbars
-void trackbarCallback(int, void*){
-	//doesn't need to do anything since the trackbars just change a global value
-}
-
-//create trackbars to adjust parameters for filtering image
-void createTrackbars(){
-	namedWindow("HSV adjust", 0);
-	createTrackbar("0: HSV | 1: RGB | 2: Gray", "HSV adjust", &type_of_thresh, 2, trackbarCallback);
-	createTrackbar("H_MID", "HSV adjust", &H_MID, H_MAX, trackbarCallback);
-	createTrackbar("H_PM", "HSV adjust", &H_PM, 255, trackbarCallback);
-	createTrackbar("S_MIN", "HSV adjust", &S_MIN, H_MAX, trackbarCallback);
-	createTrackbar("S_MAX", "HSV adjust", &S_MAX, H_MAX, trackbarCallback);
-	createTrackbar("V_MIN", "HSV adjust", &V_MIN, H_MAX, trackbarCallback);
-	createTrackbar("V_MAX", "HSV adjust", &V_MAX, H_MAX, trackbarCallback);
-	createTrackbar("ERODE_SIZE", "HSV adjust", &erode_size, morphop_max, trackbarCallback);
-	createTrackbar("DILATE_SIZE", "HSV adjust", &dilate_size, morphop_max, trackbarCallback);
-
-}
-
-
-//go from radians to degrees
-double cvtAngle(double radianVal){
-
-	return (180/3.14) * radianVal;
-}
-
-void publishKeyAndValue(string key, string value){
-	string key_value_pair = key + value;
-	s_send(publisher, key_value_pair);
+void publish(string message){
+	s_send(publisher, message);
 }
 
 void findAndSendTemperature(){
