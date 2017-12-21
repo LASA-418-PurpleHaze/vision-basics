@@ -123,7 +123,7 @@ double cvtAngle(double radianVal){
 }
 
 void publishKeyAndValue(string key, string value){
-	string key_value_pair = key + value;
+	string key_value_pair = key + ":" + value;
 	s_send(publisher, key_value_pair);
 }
 
