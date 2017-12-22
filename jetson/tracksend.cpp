@@ -123,8 +123,9 @@ double cvtAngle(double radianVal){
 }
 
 void publishKeyAndValue(string key, string value){
-	string key_value_pair = key + value;
 	cout << "sending" << endl;
+	cout << key << ":" << value << endl;
+	string key_value_pair = key + ":" + value;
 	s_send(publisher, key_value_pair);
 }
 
