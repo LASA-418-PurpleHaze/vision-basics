@@ -23,7 +23,7 @@ int main(int argc, char** argv){
 	// Setup output video
 	VideoWriter output_cap(argv[4], 
 	               CV_FOURCC('M','J','P','G'),
-	               120,
+	               500,
 	               cv::Size(480, 640));
 	
 	if (!output_cap.isOpened())
@@ -57,7 +57,7 @@ int main(int argc, char** argv){
 	
 	const int thing = 47;
 	cout << "about to start writing" << endl;
-	for(int i = 0; i < 500; i++)
+	for(int i = 0; i < 2500; i++)
 	{       
 		if(i%thing > thing/2) {
 	    	output_cap << frame;

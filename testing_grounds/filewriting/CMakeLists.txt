@@ -1,6 +1,6 @@
 
 cmake_minimum_required(VERSION 3.2)
-project(roborio_sim)
+project(filewriter)
 set(CMAKE_CXX_STANDARD 14)
 find_package( OpenCV REQUIRED )
 find_package(PkgConfig)
@@ -15,6 +15,6 @@ find_library(ZeroMQ_LIBRARY
 	)
 set(SOURCE_FILES main.cpp)
 include_directories( ${OpenCV_INCLUDE_DIRS} )
-add_executable(roborio_sim roborio_sim.cpp )
-target_link_libraries( roborio_sim ${OpenCV_LIBS}
+add_executable(filewriter filewriter.cpp )
+target_link_libraries( filewriter ${OpenCV_LIBS}
 				   ${ZeroMQ_LIBRARY} )
