@@ -44,9 +44,17 @@ int seconds_since_last_message(){
 void cleanup(string cheese){
 	cout << "cleaning up " << cheese << " things" << endl;
 }
+
+int get_timeout_allowance(string state){
+	if (state == "auto") {
+		return 15;
+	} else if (state == "tele") {
+		return 30;
+	}
+}
 int main(){
 	subscriber.setsockopt(ZMQ_SUBSCRIBE, "", 0);
-	subscriber.connect("tcp://localhost:5803");
+	subscriber.connect("tcp://localhost:5804");
 	string message = "";
 	string current_state = "disabled";
 	update_time_at_last_message();
@@ -57,41 +65,48 @@ int main(){
 		message = s_recv_noblock(subscriber);
 		if (message == "AUTO_INIT") {
 			if(current_state == "tele"){ cleanup(current_state);}
-			update_time_at_last_message();
-			timeout_ending_enabled = true;
-			current_state = "auto";		
-			initialize = true;
+			if(current_state != "auto"){
+				update_time_at_last_message();
+				timeout_ending_enabled = true;
+				current_state = "auto";		
+				initialize = true;
+			}
 		} else if (message == "TELE_INIT") {
-			if(current_state == "auto"){
-				cleanup(current_state);}
-			update_time_at_last_message();
 			timeout_ending_enabled = true;
-			current_state = "tele";
-			initialize = true;
+			if (current_state == "auto") {
+				cleanup(current_state);}
+			if (current_state != "tele") {
+			update_time_at_last_message();
+				current_state = "tele";
+				initialize = true;
+			}
 		} else if (message == "DISABLED_INIT") {
-			timeout_ending_enabled = false;
-			cleanup(current_state);	
-			current_state = "lazy";
-			initialize = false;
+			if(current_state != "lazy"){
+				timeout_ending_enabled = false;
+				cleanup(current_state);	
+				current_state = "lazy";
+				initialize = false;
+			}
 
 		} else if (message == "END") {
 			cleanup(current_state);
 			current_state = "lazy";
 			initialize = false;
-		} else if (timeout_ending_enabled && seconds_since_last_message() > 7){
+		} else if (timeout_ending_enabled && seconds_since_last_message() > get_timeout_allowance(current_state) ){
 			message = "END";
 			cleanup(current_state);
 			current_state = "lazy";
 			initialize = false;
 		}else{
 			initialize = false;
+			cout << message << endl;
 		}
 		
 		if(initialize == true){ cout << "initialize " << current_state << endl;}
 		else if(current_state != "lazy" && current_state != "disabled"){ cout << "doing " << current_state << " things" << endl;}
 	}
 
-	cout << "ended" << endl;
+	
 
 	
 	

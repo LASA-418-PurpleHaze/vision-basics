@@ -1,4 +1,5 @@
 CMakeCache.txt
-CMakeFiles
+**/CMakeFiles/*
 Makefile
 cmake_install.cmake
+*.swp

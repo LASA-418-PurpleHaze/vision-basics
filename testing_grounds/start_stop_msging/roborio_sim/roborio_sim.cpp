@@ -22,7 +22,7 @@ void publish(string message){
 
 int main(){
 	
-	publisher.bind("tcp://*:5803");
+	publisher.bind("tcp://*:5804");
 	string message = "initial message";
 	while(1){
 		cin >> message;

@@ -55,7 +55,7 @@ int morphop_max = 10;
 //initialize zmq objects
 context_t context (1);
 socket_t publisher (context, ZMQ_PUB);
-int sndhwm = 1;
+socket_t subscriber (context, ZMQ_SUB);
 
 //define target size
 int target_height = 1; //target height in inches. just using a roll of tape is 1 inch
@@ -66,6 +66,77 @@ bool found_single_target = true; //set to true since ContourSelector takes care 
 //calculate angle offset between what and the tape?
 //choose some point, call it the center of the image, that the camera should try to line up with
 Point2f desired_location = Point2f(FRAME_WIDTH/2, FRAME_HEIGHT/2);
+
+/////////////////////////////////////////
+//   GLOBAL VARS FOR IMAGE PROCESSING  //
+/////////////////////////////////////////
+
+//create a matrix for each step to improve readability
+	Mat src;
+	Mat color_converted;
+	Mat thresh;
+	Mat morphops;
+	Mat erodeElement;
+	Mat dilateElement;
+	Mat box_drawings;
+
+	VideoCapture capture;
+
+	//create vars that will contain the information we're trying to send
+	double pan_adjust;
+	double tilt_adjust;
+	double depth;
+
+
+////////////////////////////////////////
+// GLOBAL VARS FOR ROBORIO CONNECTION //
+////////////////////////////////////////
+	string roborio_message = "";
+	string current_match_state = "disabled";
+	bool need_to_initialize_videowriting = false;
+	bool timeout_ending_enabled = false;
+
+
+//////////////////////////////////////////////
+// GLOBAL VARS FOR DISPLAY AND VIDEOWRITING //
+//////////////////////////////////////////////
+	//var to decide whether or not a display screen is connected
+	bool graphics_mode;
+
+
+////////////////////////////////////
+//    TIMEOUT VARS AND FUNCTIONS  //
+////////////////////////////////////
+
+//global var and functions for timeout of program (if a disabled message should've been sent, but hasn't)
+//used to make sure that all data gets written to file, even if the disabled message doesn't come
+long time_at_last_message;
+
+
+
+int get_current_time() {
+	return (system_clock::now().time_since_epoch().count())/1000000000;
+}
+void update_time_at_last_message() {
+	time_at_last_message = get_current_time();
+}
+
+int seconds_since_last_message() {
+	return get_current_time() - time_at_last_message;
+}
+
+int get_timeout_allowance(string state){
+	if (state == "auto") {
+		return 15;
+	} else if (state == "tele") {
+		return 135;
+	}
+}
+
+
+///////////////////////////////// 
+//  IMAGE PROCESSING UTILITIES //
+/////////////////////////////////
 
 //dimensions of rectangles that will be drawn around objects
 struct WidthAndHeight{
@@ -103,17 +174,18 @@ void trackbarCallback(int, void*){
 
 //create trackbars to adjust parameters for filtering image
 void createTrackbars(){
-	namedWindow("HSV adjust", 0);
-	createTrackbar("0: HSV | 1: RGB | 2: Gray", "HSV adjust", &type_of_thresh, 2, trackbarCallback);
-	createTrackbar("H_MID", "HSV adjust", &H_MID, H_MAX, trackbarCallback);
-	createTrackbar("H_PM", "HSV adjust", &H_PM, 255, trackbarCallback);
-	createTrackbar("S_MIN", "HSV adjust", &S_MIN, H_MAX, trackbarCallback);
-	createTrackbar("S_MAX", "HSV adjust", &S_MAX, H_MAX, trackbarCallback);
-	createTrackbar("V_MIN", "HSV adjust", &V_MIN, H_MAX, trackbarCallback);
-	createTrackbar("V_MAX", "HSV adjust", &V_MAX, H_MAX, trackbarCallback);
-	createTrackbar("ERODE_SIZE", "HSV adjust", &erode_size, morphop_max, trackbarCallback);
-	createTrackbar("DILATE_SIZE", "HSV adjust", &dilate_size, morphop_max, trackbarCallback);
-
+	if(graphics_mode){
+		namedWindow("HSV adjust", 0);
+		createTrackbar("0: HSV | 1: RGB | 2: Gray", "HSV adjust", &type_of_thresh, 2, trackbarCallback);
+		createTrackbar("H_MID", "HSV adjust", &H_MID, H_MAX, trackbarCallback);
+		createTrackbar("H_PM", "HSV adjust", &H_PM, 255, trackbarCallback);
+		createTrackbar("S_MIN", "HSV adjust", &S_MIN, H_MAX, trackbarCallback);
+		createTrackbar("S_MAX", "HSV adjust", &S_MAX, H_MAX, trackbarCallback);
+		createTrackbar("V_MIN", "HSV adjust", &V_MIN, H_MAX, trackbarCallback);
+		createTrackbar("V_MAX", "HSV adjust", &V_MAX, H_MAX, trackbarCallback);
+		createTrackbar("ERODE_SIZE", "HSV adjust", &erode_size, morphop_max, trackbarCallback);
+		createTrackbar("DILATE_SIZE", "HSV adjust", &dilate_size, morphop_max, trackbarCallback);
+	}
 }
 
 
@@ -123,9 +195,35 @@ double cvtAngle(double radianVal){
 	return (180/3.14) * radianVal;
 }
 
+
+//go through an array of contours and return the index of the contour with the greatest area
+//takes in the address of the array, and the size
+//used to find biggest target, essentially a filter for morphops-resistant noise
+int ContourSelector(vector<vector<Point>> contours){
+	int max_area_index = 0;
+	for(int i = 0; i < contours.size(); i++){
+		//if a contour's area is larger than the current max, update the current max
+		if(contourArea(contours[i]) > contourArea(contours[max_area_index])){ 
+			max_area_index = i;
+			
+		}
+	}
+	return max_area_index;
+}
+
+/////////////////////
+//  ZMQ FUNCTIONS  //
+/////////////////////
+
+static std::string s_recv_noblock(zmq::socket_t & socket) {
+	zmq::message_t message;
+	socket.recv(&message, ZMQ_NOBLOCK);
+	return std::string(static_cast<char*>(message.data()), message.size());
+}
+
 void publishKeyAndValue(string key, string value){
-	cout << "sending" << endl;
-	cout << key << ":" << value << endl;
+	//cout << "sending" << endl;
+	//cout << key << ":" << value << endl;
 	string key_value_pair = key + ":" + value;
 	s_send(publisher, key_value_pair);
 }
@@ -144,88 +242,30 @@ void findAndSendTemperature(){
 		publishKeyAndValue(temperature_key, temperature_ss.str()); 
 		temperature_file.close();
 	}catch(...){} //don't do anything if you can't get the temperature reading
-	
-	
 }
 
-void publishVisionCalculations(double pan_value, double tilt_value, double depth_value){
+void publishVisionCalculations(){
 	string pan_key = "JETSON.PAN_VALUE";
 	stringstream pan_ss;
-	pan_ss << setprecision(3) << pan_value << endl;
+	pan_ss << setprecision(3) << pan_adjust << endl;
 	publishKeyAndValue(pan_key, pan_ss.str());
 
 	string tilt_key = "JETSON.TILT_VALUE";
 	stringstream tilt_ss;
-	tilt_ss << setprecision(3) << tilt_value << endl;
+	tilt_ss << setprecision(3) << tilt_adjust << endl;
 	publishKeyAndValue(tilt_key, tilt_ss.str());
 
 	string depth_key = "JETSON.DEPTH";
 	stringstream depth_ss;
-	depth_ss << setprecision(3) << depth_value << endl;
+	depth_ss << setprecision(3) << depth << endl;
 	publishKeyAndValue(depth_key, depth_ss.str());
-
-}
-//go through an array of contours and return the index of the contour with the greatest area
-//takes in the address of the array, and the size
-//used to find biggest target, essentially a filter for morphops-resistant noise
-int ContourSelector(vector<vector<Point> > contours){
-	int max_area_index = 0;
-	for(int i = 0; i < contours.size(); i++){
-		//if a contour's area is larger than the current max, update the current max
-		if(contourArea(contours[i]) > contourArea(contours[max_area_index])){ 
-			max_area_index = i;
-			
-		}
-	}
-	return max_area_index;
 }
 
-int main(int argc, char* argv[]){
-	
-	//create a matrix for each step to improve readability
-	Mat src;
-	Mat color_converted;
-	Mat thresh;
-	Mat morphops;
-	Mat erodeElement;
-	Mat dilateElement;
-	Mat box_drawings;
-
-	//setup camera
-	VideoCapture capture;
-	capture.open(1);
-	capture.set(CV_CAP_PROP_FRAME_WIDTH, FRAME_WIDTH);
-	capture.set(CV_CAP_PROP_FRAME_HEIGHT,FRAME_HEIGHT);
-
-	//create trackbars
-	createTrackbars();
-
-	//drop the exposure of the camera to 2ms
-	system("v4l2-ctl -d /dev/video1 -c exposure_auto=1 -c exposure_absolute=3");
-	
-	
-
-	//zmq_setsockopt(&publisher, ZMQ_SNDHWM, &sndhwm, sizeof(sndhwm));
-	publisher.bind("tcp://*:5803");
-
-	//create vars that will contain the information we're trying to send
-	double pan_adjust;
-	double tilt_adjust;
-	double depth;
-	
-	//check match mode, set a boolean to determine whether or not to use graphical information
-	bool graphics_mode;
-	graphics_mode = true;
-	if(argc > 1){
-		if(string(argv[1]) == "-match"){
-			graphics_mode = false;
-		}
-	}
-	
-	//process the image and send results forever (not really)
-	while(1) {
-
-		//read image from camera and show it in its own window
+//////////////////////////////
+// MAIN PROCESSING FUNCTION //
+//////////////////////////////
+void get_and_process_image(){
+	//read image from camera and show it in its own window
 		capture.read(src);
 		
 		if(graphics_mode){
@@ -301,13 +341,16 @@ int main(int argc, char* argv[]){
 			
 	       		Scalar color = Scalar(255, 255, 255);
 						//show the contour of each contour
-		        drawContours( box_drawings, contours, i, color, 1, 8, vector<Vec4i>(), 0, Point() );
-
+						if(i == target_index){
+		        	drawContours( box_drawings, contours, i, color, 1, 8, vector<Vec4i>(), 0, Point() );
+						}
 		        //show each contour's rectangle
 			Point2f rect_points[4]; 
 			minRect[i].points( rect_points );
+			if(i == target_index){
 			for( int j = 0; j < 4; j++ ){
 	          		line( box_drawings, rect_points[j], rect_points[(j+1)%4], color, 1, 8 );
+			}
 			}
 			
 			//if the rectangle seems to be about the right size for the target and isn't noise, do some calculations with it
@@ -353,17 +396,107 @@ int main(int argc, char* argv[]){
 		}else{
 			found_single_target = false;
 		}
-		
-		//send angle offsets and depth to roborio	
-		publishVisionCalculations(pan_adjust, tilt_adjust, depth);
+
+}
+
+void cleanup(string match_state){
+
+}
+
+void handle_match_flow(){
+//handle messaging from roborio and which match mode the robot is in
+		//determines where to write video to and whether or not to exit based on time
+		roborio_message	= s_recv_noblock(subscriber);	
+		if (roborio_message == "ROBORIO.STATE:AUTO_INIT") {
+			if (current_match_state == "tele") {	//refers to previous state  redundant cleanup if mode switches without disable
+				cleanup(current_match_state); 			//refers to previous state
+			}
+			if (current_match_state != "auto" ) {	//refers to previous state make sure it isn't a duplicate message
+				update_time_at_last_message();
+				timeout_ending_enabled = true;
+				current_match_state = "auto";
+				need_to_initialize_videowriting = true;
+			}
+		} else if (roborio_message == "ROBORIO.STATE:TELE_INIT") {
+			if (current_match_state == "auto") {	//refers to previous state  redundant cleanup if mode switches without disable
+				cleanup(current_match_state);				//refers to previous state	 
+			}
+			if (current_match_state != "tele") {  //refers to previous state  make sure it isn't a duplicate message
+				update_time_at_last_message();
+				timeout_ending_enabled = true;
+				current_match_state = "auto";
+				need_to_initialize_videowriting = true;
+			}
+		} else if (roborio_message == "ROBORIO.STATE:DISABLED_INIT") {
+			if (current_match_state != "disabled") {
+				timeout_ending_enabled = false;
+				cleanup(current_match_state);
+				current_match_state = "disabled";
+				need_to_initialize_videowriting = false;
+			}
+		} else if (roborio_message == "EXIT") { //exit on forced exit from user, mainly for testing, kinda useless
+			cleanup(current_match_state);
+			current_match_state = "disabled";
+			need_to_initialize_videowriting = false;
+		} else if (timeout_ending_enabled && (seconds_since_last_message() > get_timeout_allowance(current_match_state))) {
+			roborio_message = "EXIT";
+			cleanup(current_match_state);
+			current_match_state = "disabled";
+			need_to_initialize_videowriting = false;
+		} else {
+			need_to_initialize_videowriting = false;
+		}
+
+}
+
+void setup_camera(){
+	capture.open(1);
+	capture.set(CV_CAP_PROP_FRAME_WIDTH, FRAME_WIDTH);
+	capture.set(CV_CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT);
+}
+
+void setup_sockets(){
+	publisher.bind("tcp://*:5803");
+	subscriber.setsockopt(ZMQ_SUBSCRIBE, "", 0);
+	subscriber.connect("tcp://localhost:5804"); //change this for getting from roborio
+}
+/////////////////
+// ACTUAL MAIN //
+/////////////////
+int main(int argc, char* argv[]){
+	
+	setup_camera();
+	setup_sockets();
+	createTrackbars();
+
+	//drop the exposure of the camera to 2ms
+	system("v4l2-ctl -d /dev/video1 -c exposure_auto=1 -c exposure_absolute=3");
+	
+	//check match mode, set a boolean to determine whether or not to display images to a connected screen
+	graphics_mode = true;
+	if(argc > 1){
+		if(string(argv[1]) == "-match"){
+			graphics_mode = false;
+		}
+	}
+	
+	
+	//process the image and send results forever (not really)
+	while(roborio_message != "EXIT") {
+		handle_match_flow();
+
+		get_and_process_image();
+
+		publishVisionCalculations();
 
 		findAndSendTemperature();
     //unsigned int ms = duration_cast< milliseconds >(system_clock::now().time_since_epoch()).count();
 		//cout << ms << endl;
-			
-		
-		//stop doing things forever if the escape button is pressed 
+				
+		//have a waitkey to make opencv happy 
 		int c = waitKey(10);
+
+		//break on esc, only for development 
 		if((char)c == 27){
 			break;
 		}
