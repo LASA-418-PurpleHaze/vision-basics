@@ -22,6 +22,7 @@
 #include <chrono>
 #include <fstream>
 #include <thread>
+#include <videoio>
 
 using namespace cv;
 using namespace std;
@@ -33,7 +34,7 @@ const int FRAME_WIDTH = 640;
 const int FRAME_HEIGHT = 480;
 
 //define trackbar values
-int H_MID = 75;
+int H_MID = 70;
 int H_PM = 10;
 int H_MAX = 255;
 int S_MIN = 150;
@@ -61,7 +62,7 @@ socket_t subscriber (context, ZMQ_SUB);
 int target_height = 1; //target height in inches. just using a roll of tape is 1 inch
 
 //boolean for readability in sending data to roborio
-bool found_single_target = true; //set to true since ContourSelector takes care of it. can be deleted eventually, but roborio code should get updated accordingly
+bool found_single_target = true; //set to true since contourSelector takes care of it. can be deleted eventually, but roborio code should get updated accordingly
 
 //calculate angle offset between what and the tape?
 //choose some point, call it the center of the image, that the camera should try to line up with
@@ -78,7 +79,7 @@ Point2f desired_location = Point2f(FRAME_WIDTH/2, FRAME_HEIGHT/2);
 	Mat morphops;
 	Mat erodeElement;
 	Mat dilateElement;
-	Mat box_drawings;
+	Mat boxes;
 
 	VideoCapture capture;
 
@@ -103,6 +104,11 @@ Point2f desired_location = Point2f(FRAME_WIDTH/2, FRAME_HEIGHT/2);
 	//var to decide whether or not a display screen is connected
 	bool graphics_mode;
 
+	VideoWriter src_writer;
+	VideoWriter thresh_writer;
+	VideoWriter boxes_writer;
+
+	string videowriting_path;
 
 ////////////////////////////////////
 //    TIMEOUT VARS AND FUNCTIONS  //
@@ -114,18 +120,18 @@ long time_at_last_message;
 
 
 
-int get_current_time() {
+int getCurrentTime() {
 	return (system_clock::now().time_since_epoch().count())/1000000000;
 }
-void update_time_at_last_message() {
-	time_at_last_message = get_current_time();
+void updateTimeAtLastMessage() {
+	time_at_last_message = getCurrentTime();
 }
 
-int seconds_since_last_message() {
-	return get_current_time() - time_at_last_message;
+int secondsSinceLastMessage() {
+	return getCurrentTime() - time_at_last_message;
 }
 
-int get_timeout_allowance(string state){
+int getTimeoutAllowance(string state){
 	if (state == "auto") {
 		return 15;
 	} else if (state == "tele") {
@@ -133,7 +139,46 @@ int get_timeout_allowance(string state){
 	}
 }
 
+////////////////////////////
+// VIDEOWRITING FUNCTIONS //
+////////////////////////////
 
+void initializeVideoWriting(){
+	src_writer.open(videowriting_path + current_match_state + "src.avi",
+			CV_FOURCC('M', 'J', 'P', 'G'),
+			30,
+			cv::Size(FRAME_HEIGHT, FRAME_WIDTH);
+	thresh_writer.open(videowriting_path + current_match_state + "thresh.avi",
+			CV_FOURCC('M', 'J', 'P', 'G'),
+			30,
+			cv::Size(FRAME_HEIGHT, FRAME_WIDTH);
+	boxes_writer.open(videowriting_path + current_match_state + "boxes.avi",
+			CV_FOURCC('M', 'J', 'P', 'G'),
+			30,
+			cv::Size(FRAME_HEIGHT, FRAME_WIDTH);
+}
+			  
+void cleanupVideowriting(string match_state){
+	src_writer.release();
+	thresh_writer.release();
+	boxes_writer.release();
+}
+
+void displayAndWrite(string label, Mat input){
+	if (graphics_mode) {
+		imshow(label, input);
+	}
+	
+	if (label == "src" && src_writer.isOpened()) {
+		src_writer << input;
+	} else if (label == "thresh" && thresh_writer.isOpened()) {
+		cvtColor(input, input, CV_GRAY2BGR);
+		thresh_writer << input;
+	} else if (label == "boxes" && boxes_writer.isOpened()) {
+		cvtColor(input, input, CV_GRAY2BGR);
+		boxes_writer << input;
+	}
+}
 ///////////////////////////////// 
 //  IMAGE PROCESSING UTILITIES //
 /////////////////////////////////
@@ -146,16 +191,16 @@ struct WidthAndHeight{
 
 //calculate distance between two points in the image
 //used for determining orientation of the target, esp. if rectangle is rotated
-int DistFormula(Point point_a, Point point_b){
+int distanceFormula(Point point_a, Point point_b){
 	return sqrt((point_a.x-point_b.x)*(point_a.x-point_b.x)+(point_a.y-point_b.y)*(point_a.y-point_b.y));
 }
 
 //determine dimensions/orientation of a rectangle
-WidthAndHeight CalcWidthAndHeight(Point point_one, Point point_two, Point point_three){
+WidthAndHeight calcWidthAndHeight(Point point_one, Point point_two, Point point_three){
 	WidthAndHeight result;
 	
-	int length_one = DistFormula(point_one, point_two);
-	int length_two = DistFormula(point_two, point_three);
+	int length_one = distanceFormula(point_one, point_two);
+	int length_two = distanceFormula(point_two, point_three);
 
 	if(length_one > length_two){
 		result.width = length_one;
@@ -199,7 +244,7 @@ double cvtAngle(double radianVal){
 //go through an array of contours and return the index of the contour with the greatest area
 //takes in the address of the array, and the size
 //used to find biggest target, essentially a filter for morphops-resistant noise
-int ContourSelector(vector<vector<Point>> contours){
+int contourSelector(vector<vector<Point>> contours){
 	int max_area_index = 0;
 	for(int i = 0; i < contours.size(); i++){
 		//if a contour's area is larger than the current max, update the current max
@@ -264,13 +309,11 @@ void publishVisionCalculations(){
 //////////////////////////////
 // MAIN PROCESSING FUNCTION //
 //////////////////////////////
-void get_and_process_image(){
+void getAndProcessImage(){
 	//read image from camera and show it in its own window
 		capture.read(src);
 		
-		if(graphics_mode){
-			imshow("Source (1)", src);
-		}
+		displayAndWrite("src", src);
 
 		//set up next matrix with proper size and type
 		color_converted.create(src.size(), src.type());
@@ -288,17 +331,13 @@ void get_and_process_image(){
 	   	} 
 	   
 		//show the converted color image in its own window
-		if(graphics_mode){
-			imshow("Converted (2)", color_converted);
-	  	}
-
+		
+		displayAndWrite("converted", color_converted);
 
 		//threshold the image using ranges from the trackbars and show the thresholded image
 		inRange(color_converted, Scalar(H_MID - H_PM, S_MIN, V_MIN), Scalar(H_MID + H_PM, S_MAX, V_MAX), thresh);
 
-		if(graphics_mode){
-			imshow("Thresh (3)", thresh);
-		}
+		displayAndWrite("thresh", thresh);
 
 		//apply some morphops to reduce noise and show the resulting image
 		//this changes the size of the object in the image.
@@ -316,10 +355,8 @@ void get_and_process_image(){
 			putText(morphops, buffer, Point(0, 60), 2, 2, Scalar(255, 0, 255), 2);
 		}
 		
-		if(graphics_mode){
-			imshow("Morphops (4)", morphops);	
-		}
-
+		displayAndWrite("morphops", morphops);
+	
 		//find all objects in the thresholded image (hopefully there's only one)
 		vector<vector<Point> > contours;
 		vector<Vec4i> hierarchy;
@@ -332,9 +369,9 @@ void get_and_process_image(){
 		}
 		
 		//create an empty matrix that will be used to show the final important things in the image
-		box_drawings = Mat::zeros(thresh.size(), thresh.type());
+		boxes = Mat::zeros(thresh.size(), thresh.type());
 	
-		int target_index = ContourSelector(contours);
+		int target_index = contourSelector(contours);
 		//for each object in the noise reduced image, draw a box around it.
 		//if it seems big enough (probably not noise and is the actual object, calculate the angle
 		for( int i = 0; i< contours.size(); i++ ){
@@ -342,19 +379,19 @@ void get_and_process_image(){
 	       		Scalar color = Scalar(255, 255, 255);
 						//show the contour of each contour
 						if(i == target_index){
-		        	drawContours( box_drawings, contours, i, color, 1, 8, vector<Vec4i>(), 0, Point() );
+		        	drawContours( boxes, contours, i, color, 1, 8, vector<Vec4i>(), 0, Point() );
 						}
 		        //show each contour's rectangle
 			Point2f rect_points[4]; 
 			minRect[i].points( rect_points );
 			if(i == target_index){
 			for( int j = 0; j < 4; j++ ){
-	          		line( box_drawings, rect_points[j], rect_points[(j+1)%4], color, 1, 8 );
+	          		line( boxes, rect_points[j], rect_points[(j+1)%4], color, 1, 8 );
 			}
 			}
 			
 			//if the rectangle seems to be about the right size for the target and isn't noise, do some calculations with it
-			WidthAndHeight box_measurements = CalcWidthAndHeight(rect_points[0], rect_points[1], rect_points[2]);
+			WidthAndHeight box_measurements = calcWidthAndHeight(rect_points[0], rect_points[1], rect_points[2]);
 					
 			if(i == target_index){
 				
@@ -365,15 +402,15 @@ void get_and_process_image(){
 				depth = (focal_length*target_height) / box_measurements.height;
 				Moments target_moment = moments(contours[i], false);
 				Point2f target_center = Point2f(target_moment.m10/target_moment.m00, target_moment.m01/target_moment.m00);
-				circle(box_drawings, target_center, 4, color, -1, 8, 0);
-				circle(box_drawings, desired_location, 8, color, -1, 8, 0);
+				circle(boxes, target_center, 4, color, -1, 8, 0);
+				circle(boxes, desired_location, 8, color, -1, 8, 0);
 				double inches_offset_x = (((desired_location.x - target_center.x) / box_measurements.height)*target_height);
 				pan_adjust = -1*cvtAngle(atan(inches_offset_x / depth));
 				double inches_offset_y = (((desired_location.y - target_center.y) / box_measurements.height)*target_height);
 				tilt_adjust = -1*cvtAngle(atan(inches_offset_y / depth));
 				char print_buffer[50];
 				sprintf(print_buffer, "%.1f and %.1f (%.0f)", pan_adjust, tilt_adjust, depth);
-				putText(box_drawings, print_buffer, Point(0, 60), 2, 2, Scalar(255, 0, 255), 2);
+				putText(boxes, print_buffer, Point(0, 60), 2, 2, Scalar(255, 0, 255), 2);
 
 				
 			}
@@ -382,12 +419,10 @@ void get_and_process_image(){
 		//display the contour of each object, 
 		//the rectangle of each object, 
 	  //the two centers, and the angle offsets and depth in one image
-		if(graphics_mode){
-			imshow("Boxes (5)", box_drawings);
-		}		
+		displayAndWrite("boxes", boxes);	
 
 			
-		// not needed, since ContourSelector should guarantee only one target
+		// not needed, since contourSelector should guarantee only one target
 		//determine whether or not we found a single target and store it in a boolean for readability
 		//***REPLACE WITH CORNER COUNTING CHECK OR AREA VS CONVEX HULL AREA PROPORTION CHECK***
 		//***********************CURRENT CHECK ISN'T DOING MUCH********************************
@@ -399,30 +434,27 @@ void get_and_process_image(){
 
 }
 
-void cleanup(string match_state){
 
-}
-
-void handle_match_flow(){
+void handleMatchFlow(){
 //handle messaging from roborio and which match mode the robot is in
 		//determines where to write video to and whether or not to exit based on time
 		roborio_message	= s_recv_noblock(subscriber);	
 		if (roborio_message == "ROBORIO.STATE:AUTO_INIT") {
 			if (current_match_state == "tele") {	//refers to previous state  redundant cleanup if mode switches without disable
-				cleanup(current_match_state); 			//refers to previous state
+				cleanupVideowriting(current_match_state); 			//refers to previous state
 			}
 			if (current_match_state != "auto" ) {	//refers to previous state make sure it isn't a duplicate message
-				update_time_at_last_message();
+				updateTimeAtLastMessage();
 				timeout_ending_enabled = true;
 				current_match_state = "auto";
 				need_to_initialize_videowriting = true;
 			}
 		} else if (roborio_message == "ROBORIO.STATE:TELE_INIT") {
 			if (current_match_state == "auto") {	//refers to previous state  redundant cleanup if mode switches without disable
-				cleanup(current_match_state);				//refers to previous state	 
+				cleanupVideowriting(current_match_state);				//refers to previous state	 
 			}
 			if (current_match_state != "tele") {  //refers to previous state  make sure it isn't a duplicate message
-				update_time_at_last_message();
+				updateTimeAtLastMessage();
 				timeout_ending_enabled = true;
 				current_match_state = "auto";
 				need_to_initialize_videowriting = true;
@@ -430,32 +462,36 @@ void handle_match_flow(){
 		} else if (roborio_message == "ROBORIO.STATE:DISABLED_INIT") {
 			if (current_match_state != "disabled") {
 				timeout_ending_enabled = false;
-				cleanup(current_match_state);
+				cleanupVideowriting(current_match_state);
 				current_match_state = "disabled";
 				need_to_initialize_videowriting = false;
 			}
 		} else if (roborio_message == "EXIT") { //exit on forced exit from user, mainly for testing, kinda useless
-			cleanup(current_match_state);
+			cleanupVideowriting(current_match_state);
 			current_match_state = "disabled";
 			need_to_initialize_videowriting = false;
-		} else if (timeout_ending_enabled && (seconds_since_last_message() > get_timeout_allowance(current_match_state))) {
+		} else if (timeout_ending_enabled && (secondsSinceLastMessage() > getTimeoutAllowance(current_match_state))) {
 			roborio_message = "EXIT";
-			cleanup(current_match_state);
+			cleanupVideowriting(current_match_state);
 			current_match_state = "disabled";
 			need_to_initialize_videowriting = false;
 		} else {
 			need_to_initialize_videowriting = false;
 		}
+	
+		if(need_to_initialize_videowriting){
+			initializeVideowriting();
+		}
 
 }
 
-void setup_camera(){
+void setupCamera(){
 	capture.open(1);
 	capture.set(CV_CAP_PROP_FRAME_WIDTH, FRAME_WIDTH);
 	capture.set(CV_CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT);
 }
 
-void setup_sockets(){
+void setupSockets(){
 	publisher.bind("tcp://*:5803");
 	subscriber.setsockopt(ZMQ_SUBSCRIBE, "", 0);
 	subscriber.connect("tcp://localhost:5804"); //change this for getting from roborio
@@ -465,31 +501,44 @@ void setup_sockets(){
 /////////////////
 int main(int argc, char* argv[]){
 	
-	setup_camera();
-	setup_sockets();
-	createTrackbars();
-
-	//drop the exposure of the camera to 2ms
-	system("v4l2-ctl -d /dev/video1 -c exposure_auto=1 -c exposure_absolute=3");
-	
-	//check match mode, set a boolean to determine whether or not to display images to a connected screen
+	//default values
 	graphics_mode = true;
+	videowriting_path = "/media/nvidia";
+	
+	//overwrite default values with command line arguments
 	if(argc > 1){
 		if(string(argv[1]) == "-match"){
 			graphics_mode = false;
 		}
 	}
 	
+	if(argc > 2){
+		videowriting_path = string(argv[2]);
+	}
+	
+	//setup things
+	setupCamera();
+	setupSockets();
+	
+	createTrackbars();
+
+	//drop the exposure of the camera to 2ms
+	system("v4l2-ctl -d /dev/video1 -c exposure_auto=1 -c exposure_absolute=3");
+	
+	//check match mode, set a boolean to determine whether or not to display images to a connected screen
+	
+	
 	
 	//process the image and send results forever (not really)
 	while(roborio_message != "EXIT") {
-		handle_match_flow();
+		handleMatchFlow();
 
-		get_and_process_image();
-
-		publishVisionCalculations();
-
-		findAndSendTemperature();
+		if(current_match_state != "disabled"){
+			getAndProcessImage();
+			publishVisionCalculations();
+			findAndSendTemperature();
+		}
+		
     //unsigned int ms = duration_cast< milliseconds >(system_clock::now().time_since_epoch()).count();
 		//cout << ms << endl;
 				
